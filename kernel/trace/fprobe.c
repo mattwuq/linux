@@ -125,41 +125,32 @@ static void fprobe_init(struct fprobe *fp)
 
 static int fprobe_init_rethook(struct fprobe *fp, int num)
 {
-	int i, size;
-
-	if (num < 0)
-		return -EINVAL;
+	int max;
 
 	if (!fp->exit_handler) {
 		fp->rethook = NULL;
 		return 0;
 	}
 
-	/* Initialize rethook if needed */
-	size = num * num_possible_cpus() * 2;
-	if (size < 0)
+	if (num <= 0)
+		return -EINVAL;
+	max = num * num_possible_cpus() * 2;
+	/* Fail if max overflows */
+	if (max <= 0)
 		return -E2BIG;
 
-	fp->rethook = rethook_alloc((void *)fp, fprobe_exit_handler);
-	if (!fp->rethook)
-		return -ENOMEM;
-	for (i = 0; i < size; i++) {
-		struct fprobe_rethook_node *node;
+	/* Initialize rethook */
+	fp->rethook = rethook_alloc((void *)fp, fprobe_exit_handler,
+				sizeof(struct fprobe_rethook_node), max);
+	if (IS_ERR(fp->rethook))
+		return PTR_ERR(fp->rethook);
 
-		node = kzalloc(sizeof(*node), GFP_KERNEL);
-		if (!node) {
-			rethook_free(fp->rethook);
-			fp->rethook = NULL;
-			return -ENOMEM;
-		}
-		rethook_add_node(fp->rethook, &node->node);
-	}
 	return 0;
 }
 
 static void fprobe_fail_cleanup(struct fprobe *fp)
 {
-	if (fp->rethook) {
+	if (!IS_ERR_OR_NULL(fp->rethook)) {
 		/* Don't need to cleanup rethook->handler because this is not used. */
 		rethook_free(fp->rethook);
 		fp->rethook = NULL;
@@ -313,7 +304,7 @@ int unregister_fprobe(struct fprobe *fp)
 	 * current running handlers are finished, call unregister_ftrace_function()
 	 * after this.
 	 */
-	if (fp->rethook)
+	if (!IS_ERR_OR_NULL(fp->rethook))
 		rethook_free(fp->rethook);
 
 	ret = unregister_ftrace_function(&fp->ops);
